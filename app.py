@@ -23,21 +23,39 @@ with st.sidebar:
 # 2. 노션 데이터 가져오기 함수
 def get_notion_context(token, db_id):
     try:
+        # 1. 클라이언트 초기화
+        from notion_client import Client
         notion = Client(auth=token)
-        results = notion.databases.query(database_id=db_id).get("results")
         
+        # 2. 데이터베이스 쿼리 실행
+        # 최신 버전에서는 이 방식을 사용합니다.
+        response = notion.databases.query(database_id=db_id)
+        results = response.get("results")
+        
+        if not results:
+            return "노션 데이터베이스가 비어 있습니다."
+
         context_text = ""
         for page in results:
-            # '이름' 또는 '제목' 속성을 추출 (설정에 따라 'Name' 등으로 변경 필요)
-            properties = page.get("properties", {})
-            title_list = properties.get("이름", {}).get("title", []) or properties.get("Name", {}).get("title", [])
-            if title_list:
-                title = title_list[0].get("plain_text")
-                context_text += f"- 과거 사례/디테일: {title}\n"
+            props = page.get("properties", {})
+            
+            # 제목(title) 속성을 안전하게 추출
+            title_text = ""
+            for prop_name, prop_data in props.items():
+                if prop_data.get("type") == "title":
+                    title_contents = prop_data.get("title", [])
+                    if title_contents:
+                        title_text = title_contents[0].get("plain_text", "")
+                        break
+            
+            if title_text:
+                context_text += f"- 기록된 내용: {title_text}\n"
+        
         return context_text
     except Exception as e:
-        st.error(f"노션 데이터를 가져오는 데 실패했습니다: {e}")
-        return None
+        # 에러가 발생하면 화면에 상세 내용을 표시
+        st.error(f"노션 연동 중 오류 발생: {e}")
+        return ""
 
 # 3. 사용자 입력
 topic = st.text_input("어떤 결정을 내리고 싶나요?", placeholder="예: 다음 학기 휴학 여부")
@@ -81,3 +99,4 @@ if st.button("AI 분석 시작"):
                 st.markdown(response.choices[0].message.content)
         except Exception as e:
             st.error(f"오류 발생: {e}")
+
