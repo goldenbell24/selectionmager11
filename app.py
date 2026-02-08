@@ -27,8 +27,8 @@ with st.sidebar:
     st.info("설정된 가치관을 바탕으로 선택지 간의 상대적 우위를 분석합니다.")
 
 # 2. 사용자 입력 섹션
-topic = st.text_input("어떤 결정을 내리고 싶나요?", placeholder="예: 생명공학 박사 진학 vs 의대 재수")
-options = st.text_area("비교할 선택지들을 적어주세요 (쉼표로 구분)", placeholder="예: 박사 과정 진학, 의대 재수, 제약회사 취업")
+topic = st.text_input("어떤 결정을 내리고 싶나요?", placeholder="예: 국내 여행 vs 계절학기 수강")
+options = st.text_area("비교할 선택지들을 적어주세요 (쉼표로 구분)", placeholder="예: 국내 여행, 계절학기 수강, 해외 여행, 아르바이트")
 
 # 3. AI 분석 실행
 if st.button("AI 상대 비교 분석 시작"):
@@ -67,3 +67,4 @@ if st.button("AI 상대 비교 분석 시작"):
                 
         except Exception as e:
             st.error(f"오류가 발생했습니다: {e}")
+
