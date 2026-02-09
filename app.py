@@ -64,7 +64,7 @@ def save_to_notion(api_key, database_id, topic, result_text):
     response = requests.post(url, headers=headers, json=payload)
     return response.status_code == 200
 
-# --- 3. 사이드바 설정 (연결 정보 유지 대상) ---
+# --- 3. 사이드바 설정 ---
 with st.sidebar:
     st.header("🔑 API 설정")
     openai_key = st.text_input("OpenAI API Key", type="password", placeholder="sk-...")
@@ -91,9 +91,20 @@ for i in range(st.session_state.options_count):
         cons = c4.text_area("단점", key=f"opt_cons_{i}", height=70)
         option_data.append({"name": name, "detail": detail, "pros": pros, "cons": cons})
 
-if st.button("➕ 선택지 추가"):
-    st.session_state.options_count += 1
-    st.rerun()
+# 선택지 추가 및 선택지 전용 초기화 버튼
+col_opt_add, col_opt_reset = st.columns(2)
+with col_opt_add:
+    if st.button("➕ 선택지 추가", use_container_width=True):
+        st.session_state.options_count += 1
+        st.rerun()
+with col_opt_reset:
+    # 선택지 데이터만 초기화하는 버튼
+    if st.button("🗑️ 선택지만 초기화", use_container_width=True):
+        for key in list(st.session_state.keys()):
+            if key.startswith("opt_"):
+                del st.session_state[key]
+        st.session_state.options_count = 2
+        st.rerun()
 
 # --- 5. 가이드 분석 (2단계) ---
 st.markdown("---")
@@ -158,22 +169,12 @@ if st.session_state.analysis_result:
             st.balloons(); st.success("저장 완료!")
         else: st.error("저장 실패")
 
-# --- 8. 하단 리셋 버튼 (추가된 기능) ---
+# --- 8. 하단 전체 리셋 버튼 ---
 st.markdown("<br><br><br>", unsafe_allow_html=True)
 st.markdown("---")
 if st.button("🔄 모든 입력 및 분석 결과 초기화 (API 설정 제외)", use_container_width=True):
-    # 1. 초기화할 키 리스트 (위젯 키 포함)
-    keys_to_reset = [
-        'options_count', 'value_settings', 'advice_result', 'analysis_result'
-    ]
-    
-    # 2. 개별 입력 위젯에 연결된 모든 동적 키 삭제 (opt_, label_edit_ 등)
     for key in list(st.session_state.keys()):
         if key.startswith(("opt_", "label_edit_", "level_radio_", "new_val_input", "topic_input")):
             del st.session_state[key]
-            
-    # 3. 기본 데이터 리셋 호출
     init_session_state(reset_data=True)
-    
-    # 4. 페이지 새로고침
     st.rerun()
