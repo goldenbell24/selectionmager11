@@ -14,7 +14,6 @@ def init_session_state(reset_data=False):
     if 'options_count' not in st.session_state or reset_data:
         st.session_state.options_count = 2 
     if 'value_settings' not in st.session_state or reset_data:
-        # 최초 실행 시에는 최소한의 가이드만 제공 (AI 분석 후 대체됨)
         st.session_state.value_settings = []
     if 'advice_result' not in st.session_state or reset_data:
         st.session_state.advice_result = ""
@@ -129,7 +128,6 @@ if st.button("🔍 AI 맞춤 가치 생성 및 가중치 가이드 받기", use_
             with st.spinner("주제에 적합한 가치 항목을 생성하는 중..."):
                 notion_context = f"\n[사용자의 노션 과거 기록]:\n{st.session_state.notion_data}" if st.session_state.notion_data else ""
                 
-                # 가치 항목을 추출하기 위한 특수 프롬프트
                 prompt = f"""
                 [현재 주제]: {topic}
                 {notion_context}
@@ -144,24 +142,21 @@ if st.button("🔍 AI 맞춤 가치 생성 및 가중치 가이드 받기", use_
                 res_text = response.choices[0].message.content
                 st.session_state.advice_result = res_text
                 
-                # AI 응답에서 가치 항목 추출 및 세션 업데이트
                 match = re.search(r"VALUE_START: (.*?) :VALUE_END", res_text)
                 if match:
                     new_labels = [label.strip() for label in match.group(1).split(",")]
                     st.session_state.value_settings = [{"label": label, "level": "보통"} for label in new_labels]
                 
-                st.rerun() # UI 업데이트를 위해 리런
+                st.rerun()
         except Exception as e: st.error(f"오류: {e}")
 
-# --- 6. 가중치 정밀 조정 (AI가 생성한 항목 표시) ---
+# --- 6. 가중치 정밀 조정 ---
 if st.session_state.advice_result:
     with st.chat_message("assistant"):
-        # VALUE_START 태그가 사용자에게 보이지 않도록 정제하여 출력
         clean_advice = re.sub(r"VALUE_START: .* :VALUE_END", "", st.session_state.advice_result)
         st.markdown(clean_advice)
     
     st.markdown("### ⚙️ 2단계: AI 추천 가치 및 중요도 정밀 조정")
-    st.info("AI가 생성한 항목들을 확인하고, 실제 본인이 생각하는 중요도를 체크하세요.")
     
     for idx, item in enumerate(st.session_state.value_settings):
         with st.container(border=True):
@@ -178,21 +173,31 @@ if st.session_state.advice_result:
                 st.write(""); 
                 if st.button("🗑️ 삭제", key=f"del_val_{idx}"): st.session_state.value_settings.pop(idx); st.rerun()
 
-    # 항목 추가
     col_add_name, col_add_btn = st.columns([4, 1])
     new_val_name = col_add_name.text_input("직접 추가할 가치 이름", key="new_val_input")
     if col_add_btn.button("➕ 항목 추가", use_container_width=True):
         if new_val_name: st.session_state.value_settings.append({"label": new_val_name, "level": "보통"}); st.rerun()
 
-    # --- 7. 최종 상대 분석 ---
+    # --- 7. 최종 상대 분석 (오류 수정 지점) ---
     st.markdown("---")
     if st.button("🚀 3단계: 최종 상대 비교 분석 시작", use_container_width=True, type="primary"):
         try:
             client = OpenAI(api_key=openai_key)
             with st.spinner("최종 상대적 우위 분석 중..."):
-                value_context = "\n".join([f("- {v['label']}: {v['level']}") for v in st.session_state.value_settings])
+                # 수정: f 뒤에 괄호 대신 따옴표가 오도록 수정함
+                value_context = "\n".join([f"- {v['label']}: {v['level']}" for v in st.session_state.value_settings])
                 valid_options_full = [f"[{o['name']}] 상세: {o['detail']}, 장점: {o['pros']}, 단점: {o['cons']}" for o in option_data if o['name'].strip()]
-                prompt = f"""[주제]: {topic}\n[과거 맥락]: {st.session_state.notion_data[:1000]}\n[중요도 설정]:\n{value_context}\n[선택지]:\n{valid_options_full}\n\n위 데이터를 기반으로 과거 경험을 반영한 1:1 상대 분석을 수행해줘."""
+                
+                prompt = f"""
+                [분석 주제]: {topic}
+                [과거 맥락]: {st.session_state.notion_data[:1000]}
+                [중요도 설정]:
+                {value_context}
+                [선택지]:
+                {"\n\n".join(valid_options_full)}
+
+                위 데이터를 기반으로 과거 경험을 반영한 1:1 상대 분석을 수행하고 최적의 제안을 해줘.
+                """
                 response = client.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": prompt}])
                 st.session_state.analysis_result = response.choices[0].message.content
         except Exception as e: st.error(f"오류: {e}")
