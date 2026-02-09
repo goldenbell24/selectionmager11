@@ -6,7 +6,7 @@ import requests
 st.set_page_config(page_title="AI 상대적 의사결정 분석기", page_icon="⚖️", layout="wide")
 
 st.title("⚖️ AI 상대적 의사결정 분석기")
-st.subheader("노션의 기록과 가치관을 결합하고, 분석 결과를 다시 노션에 기록합니다.")
+st.subheader("가이드 분석을 통해 가중치를 정교하게 조정하고 최적의 결정을 내리세요.")
 
 # --- 세션 상태 초기화 ---
 if 'options_count' not in st.session_state:
@@ -19,6 +19,8 @@ if 'value_settings' not in st.session_state:
     ]
 if 'notion_data' not in st.session_state:
     st.session_state.notion_data = ""
+if 'advice_result' not in st.session_state:
+    st.session_state.advice_result = ""
 if 'analysis_result' not in st.session_state:
     st.session_state.analysis_result = ""
 
@@ -30,96 +32,37 @@ def get_weight_description(score):
     elif score <= 80: return "🟠 **매우 중요**"
     else: return "🔴 **절대적 기준**"
 
-def get_page_content(api_key, page_id):
-    url = f"https://api.notion.com/v1/blocks/{page_id}/children"
-    headers = {"Authorization": f"Bearer {api_key}", "Notion-Version": "2022-06-28"}
-    try:
-        response = requests.get(url, headers=headers)
-        if response.status_code == 200:
-            blocks = response.json().get("results", [])
-            content_list = []
-            for block in blocks:
-                block_type = block.get("type")
-                if block_type in ["paragraph", "heading_1", "heading_2", "heading_3", "bulleted_list_item", "numbered_list_item", "quote", "callout", "to_do"]:
-                    rich_text = block.get(block_type, {}).get("rich_text", [])
-                    text = "".join([t.get("plain_text", "") for t in rich_text])
-                    if text: content_list.append(text)
-            return "\n".join(content_list)
-        return ""
-    except: return ""
-
 def fetch_notion_full_data(api_key, database_id):
     clean_db_id = database_id.replace("-", "").strip()
     url = f"https://api.notion.com/v1/databases/{clean_db_id}/query"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Notion-Version": "2022-06-28",
-        "Content-Type": "application/json"
-    }
+    headers = {"Authorization": f"Bearer {api_key}", "Notion-Version": "2022-06-28", "Content-Type": "application/json"}
     try:
         response = requests.post(url, headers=headers, json={})
         if response.status_code == 200:
-            data = response.json()
-            pages = data.get("results", [])
-            if not pages: return "노션 데이터베이스가 비어 있습니다."
-            
+            pages = response.json().get("results", [])
             full_results = []
             for page in pages:
-                properties = page.get("properties", {})
                 title = "제목 없음"
-                for prop in properties.values():
+                for prop in page.get("properties", {}).values():
                     if prop.get('type') == 'title':
-                        title_list = prop.get('title', [])
-                        title = title_list[0]['plain_text'] if title_list else "제목 없음"
-                page_id = page.get("id")
-                body_content = get_page_content(api_key, page_id)
-                full_results.append(f"📄 [페이지: {title}]\n{body_content}\n")
+                        title = prop.get('title')[0].get('plain_text') if prop.get('title') else "제목 없음"
+                full_results.append(f"📄 [참조: {title}]")
             return "\n".join(full_results)
-        else:
-            return f"❌ 오류 ({response.status_code}): {response.json().get('message')}"
+        return f"❌ 오류: {response.status_code}"
     except Exception as e: return f"⚠️ 연결 실패: {str(e)}"
 
-def save_analysis_to_notion(api_key, database_id, topic, result_text):
-    """분석 결과를 노션 데이터베이스에 새 페이지로 저장합니다."""
+def save_to_notion(api_key, database_id, topic, result_text):
     clean_db_id = database_id.replace("-", "").strip()
     url = "https://api.notion.com/v1/pages"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Notion-Version": "2022-06-28",
-        "Content-Type": "application/json"
-    }
-    
-    # 마크다운 텍스트를 노션 블록(문단) 리스트로 변환
-    blocks = []
-    for line in result_text.split('\n'):
-        if line.strip():
-            blocks.append({
-                "object": "block",
-                "type": "paragraph",
-                "paragraph": {"rich_text": [{"type": "text", "text": {"content": line}}]}
-            })
-
-    # 데이터베이스의 제목 속성(Title)의 이름을 동적으로 찾아야 하지만, 보통 'Name' 혹은 첫 번째 속성입니다.
-    # 여기서는 일반적인 'title' 속성을 대상으로 생성합니다.
+    headers = {"Authorization": f"Bearer {api_key}", "Notion-Version": "2022-06-28", "Content-Type": "application/json"}
+    blocks = [{"object": "block", "type": "paragraph", "paragraph": {"rich_text": [{"text": {"content": line}}]}} for line in result_text.split('\n') if line.strip()]
     payload = {
         "parent": {"database_id": clean_db_id},
-        "properties": {
-            "title": { # 데이터베이스의 제목 필드 이름이 다를 경우 수정 필요 (예: "Name")
-                "title": [{"text": {"content": f"📊 분석 결과: {topic}"}}]
-            }
-        },
-        "children": blocks[:100] # 노션 API는 한 번에 최대 100개 블록까지만 허용
+        "properties": {"title": {"title": [{"text": {"content": f"📊 분석 결과: {topic}"}}]}},
+        "children": blocks[:100]
     }
-
-    try:
-        response = requests.post(url, headers=headers, json=payload)
-        if response.status_code == 200: return True
-        else:
-            # 제목 필드 이름이 'title'이 아닐 경우(예: 'Name') 재시도 로직
-            payload["properties"] = {"Name": payload["properties"]["title"]}
-            response = requests.post(url, headers=headers, json=payload)
-            return response.status_code == 200
-    except: return False
+    response = requests.post(url, headers=headers, json=payload)
+    return response.status_code == 200
 
 # 1. 사이드바 설정
 with st.sidebar:
@@ -129,89 +72,96 @@ with st.sidebar:
     st.header("📓 Notion 연동")
     notion_key = st.text_input("Notion API Key", type="password", placeholder="ntn_...")
     notion_db_id = st.text_input("Database ID", placeholder="하이픈 포함 가능")
-    
     if st.button("🔌 노션 데이터 불러오기", use_container_width=True):
-        if notion_key and notion_db_id:
-            with st.spinner("본문 수집 중..."):
-                st.session_state.notion_data = fetch_notion_full_data(notion_key, notion_db_id)
-                st.success("동기화 완료!")
-        else: st.warning("API 키와 DB ID를 입력해주세요.")
+        st.session_state.notion_data = fetch_notion_full_data(notion_key, notion_db_id)
+        st.success("동기화 완료!")
 
-# 2. 가치관 상세 설정 (팝업)
-with st.popover("🎯 의사결정 가치관 & 가중치 편집", use_container_width=True):
-    st.markdown("### 🛠️ 분석 가치 항목 설정")
-    new_settings = []
+# 2. 항목 관리 (추가/삭제만 담당)
+with st.popover("⚙️ 가치 항목 편집 (이름 및 추가/삭제)", use_container_width=True):
     for idx, item in enumerate(st.session_state.value_settings):
-        with st.container(border=True):
-            col_name, col_del = st.columns([4, 1])
-            with col_name:
-                label = st.text_input(f"가치 항목 {idx+1}", value=item["label"], key=f"label_{idx}")
-            with col_del:
-                st.write("")
-                if st.button("🗑️", key=f"del_{idx}") and len(st.session_state.value_settings) > 1:
-                    st.session_state.value_settings.pop(idx)
-                    st.rerun()
-            weight = st.slider(f"{label} 중요도", 0, 100, item["weight"], key=f"weight_{idx}")
-            st.caption(get_weight_description(weight))
-            new_settings.append({"label": label, "weight": weight})
-    st.session_state.value_settings = new_settings
-    if st.button("➕ 새로운 가치 항목 추가", use_container_width=True):
+        cols = st.columns([4, 1])
+        with cols[0]:
+            st.session_state.value_settings[idx]["label"] = st.text_input(f"항목 {idx+1}", value=item["label"], key=f"edit_label_{idx}")
+        with cols[1]:
+            if st.button("🗑️", key=f"del_{idx}"):
+                st.session_state.value_settings.pop(idx)
+                st.rerun()
+    if st.button("➕ 가치 항목 추가", use_container_width=True):
         st.session_state.value_settings.append({"label": "새 항목", "weight": 50})
         st.rerun()
 
 # 3. 입력 섹션
-topic = st.text_input("어떤 결정을 내리고 싶나요?", placeholder="예: 방학 프로젝트 주제 선정")
+topic = st.text_input("어떤 결정을 내리고 싶나요?", placeholder="예: 대학 생활 목표 설정")
 
-if st.session_state.notion_data:
-    with st.expander("📂 참조된 노션 심층 데이터", expanded=False):
-        st.text_area("수집 내용 미리보기", value=st.session_state.notion_data, height=150)
-
-st.markdown("### 📋 현재 고려 중인 선택지")
+st.markdown("### 📋 선택지 입력")
 option_data = []
 for i in range(st.session_state.options_count):
     with st.expander(f"선택지 {i+1}", expanded=True):
         c1, c2 = st.columns([1, 2])
-        with c1: name = st.text_input("이름", key=f"opt_name_{i}")
-        with c2: detail = st.text_input("기본 설명", key=f"opt_det_{i}")
+        name = c1.text_input("이름", key=f"opt_name_{i}")
+        detail = c2.text_input("기본 설명", key=f"opt_det_{i}")
         c3, c4 = st.columns(2)
-        with c3: pros = st.text_area("장점", key=f"opt_pros_{i}", height=70)
-        with c4: cons = st.text_area("단점", key=f"opt_cons_{i}", height=70)
+        pros = c3.text_area("장점", key=f"opt_pros_{i}", height=70)
+        cons = c4.text_area("단점", key=f"opt_cons_{i}", height=70)
         option_data.append({"name": name, "detail": detail, "pros": pros, "cons": cons})
 
 if st.button("➕ 선택지 추가"):
     st.session_state.options_count += 1
     st.rerun()
 
-# 4. 분석 실행
-if st.button("🚀 데이터 통합 정밀 분석 시작", use_container_width=True):
-    valid_options = [f"[{o['name']}]\n- 상세: {o['detail']}\n- 장점: {o['pros']}\n- 단점: {o['cons']}" for o in option_data if o['name'].strip()]
-    
-    if not openai_key: st.error("OpenAI API 키를 입력해주세요.")
-    elif not topic or len(valid_options) < 2: st.warning("주제와 2개 이상의 선택지를 입력해주세요.")
+# --- 4. 1단계: 가이드 분석 (가중치 조절 전) ---
+st.markdown("---")
+if st.button("🔍 1단계: 선택지 특성 분석 및 가중치 가이드 받기", use_container_width=True):
+    valid_options = [f"[{o['name']}] 장점: {o['pros']}, 단점: {o['cons']}" for o in option_data if o['name'].strip()]
+    if not openai_key or not topic or len(valid_options) < 2:
+        st.warning("API 키와 주제, 최소 2개의 선택지를 입력해주세요.")
     else:
         try:
             client = OpenAI(api_key=openai_key)
-            with st.spinner("심층 분석 중..."):
-                value_context = "\n".join([f"- {item['label']}: {item['weight']}/100" for item in st.session_state.value_settings])
-                notion_context = f"\n[노션 데이터]:\n{st.session_state.notion_data}" if st.session_state.notion_data else ""
+            with st.spinner("선택지들의 특징을 분석하여 가중치 설정을 제안하는 중..."):
+                values_list = ", ".join([v['label'] for v in st.session_state.value_settings])
+                prompt = f"""[주제]: {topic}\n[선택지]: {valid_options}\n[고려 가치]: {values_list}\n\n위 선택지들의 장단점을 일반적인 대학생 관점에서 분석해서, 각 가치의 가중치를 어떻게 조절하면 좋을지 조언해줘. 아직 구체적인 점수는 고려하지 말고, 어떤 가치가 이 결정에서 핵심이 될지 가이드라인을 제시해줘."""
+                response = client.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": prompt}])
+                st.session_state.advice_result = response.choices[0].message.content
+        except Exception as e: st.error(f"오류: {e}")
+
+# 가이드 결과 및 가중치 조절 슬라이더 표시
+if st.session_state.advice_result:
+    with st.chat_message("assistant"):
+        st.markdown("### 💡 AI 가중치 설정 가이드")
+        st.markdown(st.session_state.advice_result)
+    
+    st.markdown("### ⚙️ 2단계: 가중치 정밀 조정")
+    st.info("위 가이드를 참고하여, 이번 결정에서 각 항목이 차지하는 실제 비중을 설정하세요.")
+    
+    # 메인 화면에 슬라이더 배치
+    for idx, item in enumerate(st.session_state.value_settings):
+        with st.container(border=True):
+            st.session_state.value_settings[idx]["weight"] = st.slider(
+                f"**{item['label']}**", 0, 100, item["weight"], key=f"main_weight_{idx}"
+            )
+            st.caption(get_weight_description(st.session_state.value_settings[idx]["weight"]))
+
+    # --- 5. 2단계: 최종 심층 분석 ---
+    if st.button("🚀 3단계: 최종 심층 분석 시작", use_container_width=True, type="primary"):
+        try:
+            client = OpenAI(api_key=openai_key)
+            with st.spinner("설정된 가중치를 반영하여 최종 순위를 산출 중..."):
+                value_context = "\n".join([f"- {v['label']}: {v['weight']}/100" for v in st.session_state.value_settings])
+                valid_options_full = [f"[{o['name']}] 상세: {o['detail']}, 장점: {o['pros']}, 단점: {o['cons']}" for o in option_data if o['name'].strip()]
                 
-                prompt = f"""[주제]: {topic}\n{notion_context}\n[가치관]: {value_context}\n[선택지]:\n{"\n\n".join(valid_options)}\n\n위 데이터를 바탕으로 선택지별 상대적 우위를 분석하고 최종 순위를 제안해줘."""
-                
+                prompt = f"""[주제]: {topic}\n[가중치 설정]:\n{value_context}\n[선택지 정보]:\n{valid_options_full}\n\n사용자가 설정한 가중치를 엄격하게 적용하여 각 선택지의 상대적 우위를 분석하고, 최종 순위와 이유를 Markdown 표와 리스트로 작성해줘."""
                 response = client.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": prompt}])
                 st.session_state.analysis_result = response.choices[0].message.content
         except Exception as e: st.error(f"오류: {e}")
 
-# 분석 결과 및 저장 버튼 표시
+# 최종 결과 및 노션 저장
 if st.session_state.analysis_result:
     st.markdown("---")
-    st.success("✅ 분석 완료!")
+    st.success("✅ 최종 심층 분석 완료")
     st.markdown(st.session_state.analysis_result)
     
-    # 노션 저장 버튼 (분석 결과가 있을 때만 표시)
-    if st.button("💾 분석 결과를 노션에 새 페이지로 저장하기", use_container_width=True):
-        if notion_key and notion_db_id:
-            with st.spinner("노션에 새 페이지 생성 중..."):
-                success = save_analysis_to_notion(notion_key, notion_db_id, topic, st.session_state.analysis_result)
-                if success: st.balloons(); st.success("노션 데이터베이스에 새로운 결과 페이지가 생성되었습니다!")
-                else: st.error("노션 저장 중 오류가 발생했습니다. 권한 설정을 확인해주세요.")
-        else: st.warning("사이드바에서 노션 API 키와 DB ID를 먼저 입력해주세요.")
+    if st.button("💾 이 결과를 노션에 새 페이지로 저장", use_container_width=True):
+        if save_to_notion(notion_key, notion_db_id, topic, st.session_state.analysis_result):
+            st.balloons(); st.success("노션에 성공적으로 기록되었습니다!")
+        else: st.error("노션 저장에 실패했습니다.")
