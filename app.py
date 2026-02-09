@@ -1,31 +1,25 @@
 import streamlit as st
 from openai import OpenAI
 import requests
+import re
 
 # 페이지 설정
 st.set_page_config(page_title="AI 상대적 의사결정 분석기", page_icon="⚖️", layout="wide")
 
 st.title("⚖️ AI 상대적 의사결정 분석기")
-st.subheader("과거의 경험과 현재의 가치를 결합하여 최적의 의사결정을 설계합니다.")
+st.subheader("주제에 최적화된 가치 기준을 AI가 직접 제안하고 분석합니다.")
 
-# --- 1. 세션 상태 초기화 함수 ---
+# --- 1. 세션 상태 초기화 ---
 def init_session_state(reset_data=False):
-    # 선택지 개수 초기화
     if 'options_count' not in st.session_state or reset_data:
         st.session_state.options_count = 2 
-    # 가치 설정 초기화
     if 'value_settings' not in st.session_state or reset_data:
-        st.session_state.value_settings = [
-            {"label": "경제적 효율성", "level": "보통"},
-            {"label": "시간적 효율성", "level": "보통"},
-            {"label": "개인적 즐거움", "level": "보통"}
-        ]
-    # 결과 데이터 초기화
+        # 최초 실행 시에는 최소한의 가이드만 제공 (AI 분석 후 대체됨)
+        st.session_state.value_settings = []
     if 'advice_result' not in st.session_state or reset_data:
         st.session_state.advice_result = ""
     if 'analysis_result' not in st.session_state or reset_data:
         st.session_state.analysis_result = ""
-    # 노션 데이터는 API 연결 정보이므로 완전 리셋 시에만 초기화 고려 (여기선 유지)
     if 'notion_data' not in st.session_state:
         st.session_state.notion_data = ""
 
@@ -33,7 +27,7 @@ init_session_state()
 
 IMPORTANCE_LEVELS = ["매우 덜 중요", "덜 중요", "보통", "중요", "매우 중요"]
 
-# --- 2. 노션 API 관련 함수 ---
+# --- 2. 유틸리티 함수 (노션 및 데이터 처리) ---
 def get_page_content(api_key, page_id):
     url = f"https://api.notion.com/v1/blocks/{page_id}/children"
     headers = {"Authorization": f"Bearer {api_key}", "Notion-Version": "2022-06-28"}
@@ -98,15 +92,14 @@ with st.sidebar:
         st.session_state.notion_data = fetch_notion_full_data(notion_key, notion_db_id)
         st.success("노션 데이터 동기화 완료!")
 
-# --- 4. 1단계: 선택지 입력 섹션 ---
-topic = st.text_input("어떤 결정을 내리고 싶나요?", placeholder="예: 방학 프로젝트 주제 선정", key="topic_input")
+# --- 4. 1단계: 선택지 입력 ---
+topic = st.text_input("어떤 결정을 내리고 싶나요?", placeholder="예: 대학원 진학 vs 취업", key="topic_input")
 
 st.markdown("### 📋 1단계: 선택지 입력")
 option_data = []
 for i in range(st.session_state.options_count):
     with st.expander(f"선택지 {i+1}", expanded=True):
         c1, c2 = st.columns([1, 2])
-        # 각 입력 위젯에 고유한 key 부여
         name = c1.text_input("이름", key=f"opt_name_{i}")
         detail = c2.text_input("기본 설명", key=f"opt_det_{i}")
         c3, c4 = st.columns(2)
@@ -114,54 +107,62 @@ for i in range(st.session_state.options_count):
         cons = c4.text_area("단점", key=f"opt_cons_{i}", height=70)
         option_data.append({"name": name, "detail": detail, "pros": pros, "cons": cons})
 
-# 버튼 레이아웃
 col_add, col_reset = st.columns(2)
 with col_add:
     if st.button("➕ 선택지 추가", use_container_width=True):
-        st.session_state.options_count += 1
-        st.rerun()
-
+        st.session_state.options_count += 1; st.rerun()
 with col_reset:
-    # --- 핵심 수정 부분: 선택지 관련 세션 키를 모두 삭제 ---
     if st.button("🗑️ 선택지만 초기화", use_container_width=True):
         for key in list(st.session_state.keys()):
-            # 선택지 입력 위젯과 관련된 키(opt_로 시작)만 삭제
-            if key.startswith("opt_"):
-                del st.session_state[key]
-        # 선택지 개수도 기본값으로 되돌림
-        st.session_state.options_count = 2
-        # 분석 결과 등도 함께 비우는 것이 논리적이므로 초기화
-        st.session_state.advice_result = ""
-        st.session_state.analysis_result = ""
-        st.rerun()
+            if key.startswith("opt_"): del st.session_state[key]
+        st.session_state.options_count = 2; st.rerun()
 
-# --- 5. 2단계: AI 가이드 및 과거 이력 매칭 ---
+# --- 5. 2단계: AI 맞춤형 가치 생성 및 가이드 ---
 st.markdown("---")
-if st.button("🔍 AI 가치 항목 및 과거 이력 매칭 가이드 받기", use_container_width=True):
+if st.button("🔍 AI 맞춤 가치 생성 및 가중치 가이드 받기", use_container_width=True):
     valid_options = [f"[{o['name']}] 장점: {o['pros']}, 단점: {o['cons']}" for o in option_data if o['name'].strip()]
     if not openai_key or not topic or len(valid_options) < 2:
         st.warning("주제와 최소 2개 이상의 선택지를 입력해주세요.")
     else:
         try:
             client = OpenAI(api_key=openai_key)
-            with st.spinner("과거 기록과 현재 상황을 대조 분석 중..."):
+            with st.spinner("주제에 적합한 가치 항목을 생성하는 중..."):
                 notion_context = f"\n[사용자의 노션 과거 기록]:\n{st.session_state.notion_data}" if st.session_state.notion_data else ""
+                
+                # 가치 항목을 추출하기 위한 특수 프롬프트
                 prompt = f"""
                 [현재 주제]: {topic}
                 {notion_context}
                 [현재 선택지]: {valid_options}
-                위 정보를 바탕으로 과거 유사 사례를 찾고, 이번 결정에서 중요하게 다뤄야 할 가치 비중과 항목(추가/삭제)을 제안해줘.
+
+                대학생 사용자를 위해 다음을 수행해줘:
+                1. 노션 기록과 주제를 분석하여 이 결정에서 고려해야 할 핵심 가치 항목 3~5개를 새로 생성해줘. (예: 예산, 학업 영향, 미래 성장성 등)
+                2. 생성한 가치 항목들을 응답 하단에 반드시 'VALUE_START: 항목1, 항목2, 항목3 :VALUE_END' 형식으로 포함해줘.
+                3. 과거 사례를 참고하여 각 항목의 추천 중요도(5단계)를 제안하고 그 이유를 설명해줘.
                 """
                 response = client.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": prompt}])
-                st.session_state.advice_result = response.choices[0].message.content
+                res_text = response.choices[0].message.content
+                st.session_state.advice_result = res_text
+                
+                # AI 응답에서 가치 항목 추출 및 세션 업데이트
+                match = re.search(r"VALUE_START: (.*?) :VALUE_END", res_text)
+                if match:
+                    new_labels = [label.strip() for label in match.group(1).split(",")]
+                    st.session_state.value_settings = [{"label": label, "level": "보통"} for label in new_labels]
+                
+                st.rerun() # UI 업데이트를 위해 리런
         except Exception as e: st.error(f"오류: {e}")
 
-# --- 6. 중요도 정밀 조정 (5단계 라디오) ---
+# --- 6. 가중치 정밀 조정 (AI가 생성한 항목 표시) ---
 if st.session_state.advice_result:
     with st.chat_message("assistant"):
-        st.markdown(st.session_state.advice_result)
+        # VALUE_START 태그가 사용자에게 보이지 않도록 정제하여 출력
+        clean_advice = re.sub(r"VALUE_START: .* :VALUE_END", "", st.session_state.advice_result)
+        st.markdown(clean_advice)
     
-    st.markdown("### ⚙️ 2단계: 가중치 및 항목 정밀 조정")
+    st.markdown("### ⚙️ 2단계: AI 추천 가치 및 중요도 정밀 조정")
+    st.info("AI가 생성한 항목들을 확인하고, 실제 본인이 생각하는 중요도를 체크하세요.")
+    
     for idx, item in enumerate(st.session_state.value_settings):
         with st.container(border=True):
             col_name, col_level, col_del = st.columns([2, 3, 1])
@@ -169,45 +170,34 @@ if st.session_state.advice_result:
                 st.session_state.value_settings[idx]["label"] = st.text_input(f"가치 이름 #{idx+1}", value=item["label"], key=f"label_edit_{idx}")
             with col_level:
                 st.session_state.value_settings[idx]["level"] = st.radio(
-                    f"'{item['label']}' 중요도", 
-                    options=IMPORTANCE_LEVELS, 
+                    f"'{item['label']}' 중요도", options=IMPORTANCE_LEVELS, 
                     index=IMPORTANCE_LEVELS.index(item["level"]), 
-                    key=f"level_radio_{idx}", 
-                    horizontal=True
+                    key=f"level_radio_{idx}", horizontal=True
                 )
             with col_del:
                 st.write(""); 
-                if st.button("🗑️ 삭제", key=f"del_val_{idx}"):
-                    st.session_state.value_settings.pop(idx)
-                    st.rerun()
+                if st.button("🗑️ 삭제", key=f"del_val_{idx}"): st.session_state.value_settings.pop(idx); st.rerun()
 
-    # 새로운 항목 추가
+    # 항목 추가
     col_add_name, col_add_btn = st.columns([4, 1])
-    new_val_name = col_add_name.text_input("새로운 가치 이름", key="new_val_input")
+    new_val_name = col_add_name.text_input("직접 추가할 가치 이름", key="new_val_input")
     if col_add_btn.button("➕ 항목 추가", use_container_width=True):
-        if new_val_name:
-            st.session_state.value_settings.append({"label": new_val_name, "level": "보통"})
-            st.rerun()
+        if new_val_name: st.session_state.value_settings.append({"label": new_val_name, "level": "보통"}); st.rerun()
 
-    # --- 7. 3단계: 최종 상대 분석 ---
+    # --- 7. 최종 상대 분석 ---
     st.markdown("---")
     if st.button("🚀 3단계: 최종 상대 비교 분석 시작", use_container_width=True, type="primary"):
         try:
             client = OpenAI(api_key=openai_key)
-            with st.spinner("과거의 교훈을 포함하여 최종 분석 중..."):
-                value_context = "\n".join([f"- {v['label']}: {v['level']}" for v in st.session_state.value_settings])
+            with st.spinner("최종 상대적 우위 분석 중..."):
+                value_context = "\n".join([f("- {v['label']}: {v['level']}") for v in st.session_state.value_settings])
                 valid_options_full = [f"[{o['name']}] 상세: {o['detail']}, 장점: {o['pros']}, 단점: {o['cons']}" for o in option_data if o['name'].strip()]
-                prompt = f"""
-                [주제]: {topic}\n{notion_context if 'notion_context' in locals() else ''}
-                [사용자 설정 중요도]: {value_context}
-                [선택지]: {valid_options_full}
-                과거의 사례와 현재의 가중치를 결합하여 선택지 간 1:1 상대적 분석을 수행하고 최적의 제안을 해줘.
-                """
+                prompt = f"""[주제]: {topic}\n[과거 맥락]: {st.session_state.notion_data[:1000]}\n[중요도 설정]:\n{value_context}\n[선택지]:\n{valid_options_full}\n\n위 데이터를 기반으로 과거 경험을 반영한 1:1 상대 분석을 수행해줘."""
                 response = client.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": prompt}])
                 st.session_state.analysis_result = response.choices[0].message.content
         except Exception as e: st.error(f"오류: {e}")
 
-# 결과 출력 및 노션 저장
+# 최종 결과 및 노션 저장
 if st.session_state.analysis_result:
     st.markdown("---")
     st.success("✅ 최종 분석 완료")
@@ -217,11 +207,10 @@ if st.session_state.analysis_result:
             st.balloons(); st.success("저장 완료!")
         else: st.error("저장 실패")
 
-# --- 8. 하단 전체 리셋 ---
+# --- 8. 전체 리셋 ---
 st.markdown("<br><br><br>---", unsafe_allow_html=True)
-if st.button("🔄 모든 입력 및 결과 초기화 (API 제외)", use_container_width=True):
+if st.button("🔄 모든 입력 및 분석 결과 초기화 (API 제외)", use_container_width=True):
     for key in list(st.session_state.keys()):
         if key.startswith(("opt_", "label_edit_", "level_radio_", "new_val_input", "topic_input")):
             del st.session_state[key]
-    init_session_state(reset_data=True)
-    st.rerun()
+    init_session_state(reset_data=True); st.rerun()
