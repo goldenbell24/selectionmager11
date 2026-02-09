@@ -6,7 +6,7 @@ import requests
 st.set_page_config(page_title="AI 상대적 의사결정 분석기", page_icon="⚖️", layout="wide")
 
 st.title("⚖️ AI 상대적 의사결정 분석기")
-st.subheader("가이드 분석을 통해 가중치를 정교하게 조정하고 최적의 결정을 내리세요.")
+st.subheader("과거의 기록과 현재의 가치를 결합하여 최적의 의사결정을 설계합니다.")
 
 # --- 세션 상태 초기화 ---
 if 'options_count' not in st.session_state:
@@ -39,16 +39,18 @@ def fetch_notion_full_data(api_key, database_id):
     try:
         response = requests.post(url, headers=headers, json={})
         if response.status_code == 200:
-            pages = response.json().get("results", [])
+            data = response.json()
+            pages = data.get("results", [])
             full_results = []
             for page in pages:
                 title = "제목 없음"
                 for prop in page.get("properties", {}).values():
                     if prop.get('type') == 'title':
-                        title = prop.get('title')[0].get('plain_text') if prop.get('title') else "제목 없음"
-                full_results.append(f"📄 [참조: {title}]")
+                        title_list = prop.get('title', [])
+                        title = title_list[0]['plain_text'] if title_list else "제목 없음"
+                full_results.append(f"• {title}")
             return "\n".join(full_results)
-        return f"❌ 오류: {response.status_code}"
+        return f"❌ 노션 연결 오류: {response.status_code}"
     except Exception as e: return f"⚠️ 연결 실패: {str(e)}"
 
 def save_to_notion(api_key, database_id, topic, result_text):
@@ -74,26 +76,12 @@ with st.sidebar:
     notion_db_id = st.text_input("Database ID", placeholder="하이픈 포함 가능")
     if st.button("🔌 노션 데이터 불러오기", use_container_width=True):
         st.session_state.notion_data = fetch_notion_full_data(notion_key, notion_db_id)
-        st.success("동기화 완료!")
+        st.success("노션 데이터 동기화 완료!")
 
-# 2. 항목 관리 (추가/삭제만 담당)
-with st.popover("⚙️ 가치 항목 편집 (이름 및 추가/삭제)", use_container_width=True):
-    for idx, item in enumerate(st.session_state.value_settings):
-        cols = st.columns([4, 1])
-        with cols[0]:
-            st.session_state.value_settings[idx]["label"] = st.text_input(f"항목 {idx+1}", value=item["label"], key=f"edit_label_{idx}")
-        with cols[1]:
-            if st.button("🗑️", key=f"del_{idx}"):
-                st.session_state.value_settings.pop(idx)
-                st.rerun()
-    if st.button("➕ 가치 항목 추가", use_container_width=True):
-        st.session_state.value_settings.append({"label": "새 항목", "weight": 50})
-        st.rerun()
+# 2. 메인 입력 섹션
+topic = st.text_input("어떤 결정을 내리고 싶나요?", placeholder="예: 방학 프로젝트 주제 선정")
 
-# 3. 입력 섹션
-topic = st.text_input("어떤 결정을 내리고 싶나요?", placeholder="예: 대학 생활 목표 설정")
-
-st.markdown("### 📋 선택지 입력")
+st.markdown("### 📋 1단계: 선택지 입력")
 option_data = []
 for i in range(st.session_state.options_count):
     with st.expander(f"선택지 {i+1}", expanded=True):
@@ -109,59 +97,104 @@ if st.button("➕ 선택지 추가"):
     st.session_state.options_count += 1
     st.rerun()
 
-# --- 4. 1단계: 가이드 분석 (가중치 조절 전) ---
+# --- 3. 가이드 분석 실행 ---
 st.markdown("---")
-if st.button("🔍 1단계: 선택지 특성 분석 및 가중치 가이드 받기", use_container_width=True):
+if st.button("🔍 AI 가중치 및 가치 항목 가이드 받기", use_container_width=True):
     valid_options = [f"[{o['name']}] 장점: {o['pros']}, 단점: {o['cons']}" for o in option_data if o['name'].strip()]
     if not openai_key or not topic or len(valid_options) < 2:
         st.warning("API 키와 주제, 최소 2개의 선택지를 입력해주세요.")
     else:
         try:
             client = OpenAI(api_key=openai_key)
-            with st.spinner("선택지들의 특징을 분석하여 가중치 설정을 제안하는 중..."):
-                values_list = ", ".join([v['label'] for v in st.session_state.value_settings])
-                prompt = f"""[주제]: {topic}\n[선택지]: {valid_options}\n[고려 가치]: {values_list}\n\n위 선택지들의 장단점을 일반적인 대학생 관점에서 분석해서, 각 가치의 가중치를 어떻게 조절하면 좋을지 조언해줘. 아직 구체적인 점수는 고려하지 말고, 어떤 가치가 이 결정에서 핵심이 될지 가이드라인을 제시해줘."""
+            with st.spinner("과거 데이터와 현재 선택지를 분석 중..."):
+                current_values = ", ".join([v['label'] for v in st.session_state.value_settings])
+                notion_context = f"\n[사용자의 과거 고민 이력]:\n{st.session_state.notion_data}" if st.session_state.notion_data else ""
+                
+                prompt = f"""
+                [주제]: {topic}
+                {notion_context}
+                [현재 설정된 가치 항목]: {current_values}
+                [현재 선택지]: {valid_options}
+
+                위 정보를 바탕으로 대학생 사용자의 의사결정을 돕기 위한 가이드를 작성해줘:
+                1. 노션에 기록된 과거 고민들을 참고하여 사용자가 중요하게 여겨왔던 가치관이 무엇인지 파악하고, 이번 결정에 적절한 가중치(%)를 제안해줘.
+                2. 현재 설정된 가치 항목 외에 추가하면 좋을 가치와, 이번 결정에서 불필요해 보이는 삭제 대상 가치를 추천해줘.
+                3. 분석 근거를 명확하고 친절하게 설명해줘.
+                """
                 response = client.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": prompt}])
                 st.session_state.advice_result = response.choices[0].message.content
         except Exception as e: st.error(f"오류: {e}")
 
-# 가이드 결과 및 가중치 조절 슬라이더 표시
+# --- 4. 가중치 정밀 조정 및 항목 편집 화면 ---
 if st.session_state.advice_result:
     with st.chat_message("assistant"):
-        st.markdown("### 💡 AI 가중치 설정 가이드")
+        st.markdown("### 💡 AI 가중치 및 항목 추천 가이드")
         st.markdown(st.session_state.advice_result)
     
-    st.markdown("### ⚙️ 2단계: 가중치 정밀 조정")
-    st.info("위 가이드를 참고하여, 이번 결정에서 각 항목이 차지하는 실제 비중을 설정하세요.")
+    st.markdown("### ⚙️ 2단계: 가치 항목 및 가중치 정밀 조정")
+    st.info("AI의 추천을 참고하여 분석 기준을 최종 확정하세요. 항목을 추가하거나 삭제할 수 있습니다.")
     
-    # 메인 화면에 슬라이더 배치
+    # 가중치 슬라이더 및 삭제 버튼
     for idx, item in enumerate(st.session_state.value_settings):
         with st.container(border=True):
-            st.session_state.value_settings[idx]["weight"] = st.slider(
-                f"**{item['label']}**", 0, 100, item["weight"], key=f"main_weight_{idx}"
-            )
-            st.caption(get_weight_description(st.session_state.value_settings[idx]["weight"]))
+            col_slide, col_del = st.columns([5, 1])
+            with col_slide:
+                # 항목 이름 수정 및 슬라이더
+                new_label = st.text_input(f"가치 이름 #{idx+1}", value=item["label"], key=f"label_edit_{idx}")
+                st.session_state.value_settings[idx]["label"] = new_label
+                weight = st.slider(f"'{new_label}'의 가중치", 0, 100, item["weight"], key=f"weight_slide_{idx}")
+                st.session_state.value_settings[idx]["weight"] = weight
+                st.caption(get_weight_description(weight))
+            with col_del:
+                st.write("") # 간격 맞춤
+                if st.button("🗑️ 삭제", key=f"del_val_{idx}"):
+                    st.session_state.value_settings.pop(idx)
+                    st.rerun()
 
-    # --- 5. 2단계: 최종 심층 분석 ---
+    # 새로운 가치 항목 추가
+    col_add_name, col_add_btn = st.columns([4, 1])
+    with col_add_name:
+        new_val_name = st.text_input("새로운 가치 항목 이름", placeholder="예: 미래 성장성", key="new_val_input")
+    with col_add_btn:
+        st.write("") # 간격 맞춤
+        if st.button("➕ 항목 추가", use_container_width=True):
+            if new_val_name:
+                st.session_state.value_settings.append({"label": new_val_name, "weight": 50})
+                st.rerun()
+
+    # --- 5. 최종 심층 분석 ---
+    st.markdown("---")
     if st.button("🚀 3단계: 최종 심층 분석 시작", use_container_width=True, type="primary"):
         try:
             client = OpenAI(api_key=openai_key)
-            with st.spinner("설정된 가중치를 반영하여 최종 순위를 산출 중..."):
+            with st.spinner("설정된 가중치를 반영하여 정밀 시뮬레이션 중..."):
                 value_context = "\n".join([f"- {v['label']}: {v['weight']}/100" for v in st.session_state.value_settings])
                 valid_options_full = [f"[{o['name']}] 상세: {o['detail']}, 장점: {o['pros']}, 단점: {o['cons']}" for o in option_data if o['name'].strip()]
                 
-                prompt = f"""[주제]: {topic}\n[가중치 설정]:\n{value_context}\n[선택지 정보]:\n{valid_options_full}\n\n사용자가 설정한 가중치를 엄격하게 적용하여 각 선택지의 상대적 우위를 분석하고, 최종 순위와 이유를 Markdown 표와 리스트로 작성해줘."""
+                prompt = f"""
+                [주제]: {topic}
+                [사용자 최종 가중치]:
+                {value_context}
+                [선택지 정보]:
+                {valid_options_full}
+
+                위 데이터를 바탕으로:
+                1. 사용자가 설정한 가중치를 엄격하게 적용하여 각 선택지의 점수를 산출하고 순위를 매겨줘.
+                2. 각 선택지가 가중치가 높은 핵심 가치들을 얼마나 충족하는지 상대적으로 비교 분석해줘.
+                3. 최종 결정을 내리는 데 도움이 될 한 줄 평을 작성해줘.
+                결과는 Markdown 표와 리스트로 가독성 있게 작성해줘.
+                """
                 response = client.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": prompt}])
                 st.session_state.analysis_result = response.choices[0].message.content
         except Exception as e: st.error(f"오류: {e}")
 
-# 최종 결과 및 노션 저장
+# 최종 결과 출력 및 저장
 if st.session_state.analysis_result:
     st.markdown("---")
-    st.success("✅ 최종 심층 분석 완료")
+    st.success("✅ 최종 심층 분석 결과")
     st.markdown(st.session_state.analysis_result)
     
-    if st.button("💾 이 결과를 노션에 새 페이지로 저장", use_container_width=True):
+    if st.button("💾 분석 결과를 노션에 새 페이지로 기록", use_container_width=True):
         if save_to_notion(notion_key, notion_db_id, topic, st.session_state.analysis_result):
-            st.balloons(); st.success("노션에 성공적으로 기록되었습니다!")
-        else: st.error("노션 저장에 실패했습니다.")
+            st.balloons(); st.success("노션에 성공적으로 저장되었습니다!")
+        else: st.error("노션 저장에 실패했습니다. API 설정을 확인하세요.")
